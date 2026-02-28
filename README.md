@@ -10,6 +10,17 @@ Global market-cap dashboard for tracking the world's largest assets, their ranki
 - `frontend/`: Next.js dashboard
 - `.github/workflows/`: CI and scheduled jobs
 
+## Real data sources
+
+- `CompaniesMarketCap`: current top-asset ranking and historical market-cap/price pages for supported assets
+- `CoinGecko API`: historical price and market-cap data for crypto assets such as BTC and ETH
+
+## Current limitations
+
+- Historical global ranks are only available from snapshots collected by this project going forward.
+- For some non-equity assets such as gold, historical market cap is available before historical price is.
+- The system currently backfills detailed history only for tracked assets: `GOLD`, `BTC`, `ETH`, `NVDA`.
+
 ## Quick start
 
 ### Backend
@@ -34,8 +45,12 @@ npm run dev
 
 ```bash
 cd data_pipeline
-python jobs/pull_assets.py
-python jobs/normalize_assets.py
-python jobs/compute_factors.py
-python jobs/detect_anomalies.py
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cd jobs
+python pull_assets.py
+python normalize_assets.py
+python compute_factors.py
+python detect_anomalies.py
 ```

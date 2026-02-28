@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS fact_asset_snapshot_daily (
   price_usd DOUBLE,
   market_cap_usd DOUBLE NOT NULL,
   volume_usd DOUBLE,
-  rank_global INTEGER NOT NULL,
+  rank_global INTEGER,
   rank_in_type INTEGER,
   source TEXT NOT NULL,
   ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
