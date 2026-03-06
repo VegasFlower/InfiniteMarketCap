@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ COMPANIES_MARKET_CAP_BASE_URL = "https://companiesmarketcap.com"
 COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
 USER_AGENT = "InfiniteMarketCap/0.1 (+https://github.com/VegasFlower/InfiniteMarketCap)"
 TIMEOUT_SECONDS = 30
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 
 TRACKED_ASSETS = {
     "gold": {
@@ -169,8 +171,10 @@ def _parse_companiesmarketcap_series(slug: str, path: str, value_key: str) -> pd
     html = _http_get(f"{COMPANIES_MARKET_CAP_BASE_URL}/{slug}/{path}/").text
     match = JSON_DATA_PATTERN.search(html)
     if not match:
-        raise RuntimeError(f"Failed to parse chart series from {slug}/{path}")
+        return pd.DataFrame(columns=["date", "value"])
     series = json.loads(match.group(1))
+    if not series:
+        return pd.DataFrame(columns=["date", "value"])
     data = pd.DataFrame(series)
     data["date"] = pd.to_datetime(data["d"], unit="s", utc=True).dt.date.astype(str)
     data = data.rename(columns={value_key: "value"})[["date", "value"]]
@@ -188,10 +192,16 @@ def fetch_companiesmarketcap_price_history(slug: str) -> pd.DataFrame:
 
 
 def fetch_coingecko_history(coin_id: str) -> pd.DataFrame:
-    response = _http_get(
+    headers = {"User-Agent": USER_AGENT}
+    if COINGECKO_API_KEY:
+        headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
+    response = requests.get(
         f"{COINGECKO_BASE_URL}/coins/{coin_id}/market_chart",
         params={"vs_currency": "usd", "days": "max", "interval": "daily"},
+        headers=headers,
+        timeout=TIMEOUT_SECONDS,
     )
+    response.raise_for_status()
     payload = response.json()
     prices = pd.DataFrame(payload["prices"], columns=["timestamp_ms", "price_usd"])
     market_caps = pd.DataFrame(payload["market_caps"], columns=["timestamp_ms", "market_cap_usd"])
@@ -206,15 +216,34 @@ def fetch_tracked_asset_histories(current_snapshot: pd.DataFrame) -> pd.DataFram
 
     for asset_id, config in TRACKED_ASSETS.items():
         current_row = snapshot_lookup.get(asset_id, {})
-        if config["history_provider"] == "coingecko":
-            history = fetch_coingecko_history(config["coingecko_id"])
-        elif config["history_provider"] == "companiesmarketcap_marketcap_and_price":
-            market_caps = fetch_companiesmarketcap_marketcap_history(config["companiesmarketcap_slug"])
-            prices = fetch_companiesmarketcap_price_history(config["companiesmarketcap_slug"])
-            history = market_caps.merge(prices, on="date", how="left")
-        else:
-            history = fetch_companiesmarketcap_marketcap_history(config["companiesmarketcap_slug"])
-            history["price_usd"] = None
+        try:
+            if config["history_provider"] == "coingecko":
+                history = fetch_coingecko_history(config["coingecko_id"])
+            elif config["history_provider"] == "companiesmarketcap_marketcap_and_price":
+                market_caps = fetch_companiesmarketcap_marketcap_history(config["companiesmarketcap_slug"])
+                prices = fetch_companiesmarketcap_price_history(config["companiesmarketcap_slug"])
+                history = market_caps.merge(prices, on="date", how="left")
+            else:
+                history = fetch_companiesmarketcap_marketcap_history(config["companiesmarketcap_slug"])
+                history["price_usd"] = None
+        except Exception as error:
+            print(f"[WARN] Failed to fetch history for {asset_id}: {error}")
+            history = pd.DataFrame(columns=["date", "price_usd", "market_cap_usd"])
+
+        if history.empty:
+            if current_row:
+                history = pd.DataFrame(
+                    [
+                        {
+                            "date": current_snapshot["date"].iloc[0],
+                            "price_usd": current_row.get("price_usd"),
+                            "market_cap_usd": current_row.get("market_cap_usd"),
+                        }
+                    ]
+                )
+            else:
+                print(f"[WARN] No current snapshot for tracked asset {asset_id}, skipping.")
+                continue
 
         history["asset_id"] = config["asset_id"]
         history["symbol"] = config["symbol"]
@@ -226,6 +255,24 @@ def fetch_tracked_asset_histories(current_snapshot: pd.DataFrame) -> pd.DataFram
         history["source"] = f"historical_{config['history_provider']}"
         history["source_slug"] = config.get("companiesmarketcap_slug") or config.get("coingecko_id")
         history_frames.append(history)
+
+    if not history_frames:
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "asset_id",
+                "symbol",
+                "name",
+                "asset_type",
+                "exchange",
+                "currency",
+                "market_cap_usd",
+                "price_usd",
+                "rank_global",
+                "source",
+                "source_slug",
+            ]
+        )
 
     combined = pd.concat(history_frames, ignore_index=True)
     combined = combined[

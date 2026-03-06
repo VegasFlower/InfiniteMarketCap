@@ -11,7 +11,10 @@ TRACKED_HISTORY_FILE = DATA_DIR / "tracked_asset_history.csv"
 
 def _load_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
     current_df = pd.read_csv(CURRENT_SNAPSHOT_FILE)
-    history_df = pd.read_csv(TRACKED_HISTORY_FILE)
+    if TRACKED_HISTORY_FILE.exists():
+        history_df = pd.read_csv(TRACKED_HISTORY_FILE)
+    else:
+        history_df = pd.DataFrame(columns=current_df.columns)
     combined = pd.concat([current_df, history_df], ignore_index=True)
     combined = combined.sort_values(["asset_id", "date", "source"]).drop_duplicates(["asset_id", "date"], keep="first")
     return current_df, combined
@@ -30,6 +33,19 @@ def main() -> None:
     snapshot["volume_usd"] = None
     snapshot["rank_in_type"] = None
     snapshot["ingested_at"] = datetime.now(tz=UTC)
+    snapshot = snapshot[
+        [
+            "date",
+            "asset_id",
+            "price_usd",
+            "market_cap_usd",
+            "volume_usd",
+            "rank_global",
+            "rank_in_type",
+            "source",
+            "ingested_at",
+        ]
+    ]
 
     conn.register("dim_asset_df", dim_asset)
     conn.register("snapshot_df", snapshot)

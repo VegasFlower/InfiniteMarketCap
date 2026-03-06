@@ -95,9 +95,9 @@ def main() -> None:
         benchmark_30d = 0.0
     factors["rel_strength_vs_top100_30d"] = factors["return_30d"].fillna(0) - benchmark_30d
 
-    returns_score = factors["return_30d"].fillna(0).clip(-0.5, 1.0)
-    rank_score = (-factors["rank_change_30d"].fillna(0)).clip(-20, 20) / 20
-    strength_score = factors["rel_strength_vs_top100_30d"].fillna(0).clip(-0.5, 0.5)
+    returns_score = pd.to_numeric(factors["return_30d"], errors="coerce").fillna(0).clip(-0.5, 1.0)
+    rank_score = (-pd.to_numeric(factors["rank_change_30d"], errors="coerce").fillna(0)).clip(-20, 20) / 20
+    strength_score = pd.to_numeric(factors["rel_strength_vs_top100_30d"], errors="coerce").fillna(0).clip(-0.5, 0.5)
     volatility_proxy = factors[["return_7d", "return_30d", "return_60d", "return_90d"]].std(axis=1).fillna(0).clip(0, 0.5)
     factors["trend_score"] = (
         ((returns_score + 0.5) / 1.5) * 35
