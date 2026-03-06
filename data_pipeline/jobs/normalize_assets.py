@@ -12,7 +12,7 @@ HISTORY_FILE = DATA_DIR / "tracked_asset_history.csv"
 def _load_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
     current_df = pd.read_csv(CURRENT_SNAPSHOT_FILE)
     if HISTORY_FILE.exists():
-        history_df = pd.read_csv(HISTORY_FILE)
+        history_df = pd.read_csv(HISTORY_FILE, low_memory=False)
     else:
         history_df = pd.DataFrame(columns=current_df.columns)
 

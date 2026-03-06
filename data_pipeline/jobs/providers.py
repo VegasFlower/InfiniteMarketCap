@@ -215,8 +215,10 @@ def _build_fallback_history(asset_row: pd.Series) -> pd.DataFrame:
 def fetch_top_assets_histories(current_snapshot: pd.DataFrame, lookback_years: int = 6) -> pd.DataFrame:
     history_frames: list[pd.DataFrame] = []
     min_date = (date.today() - timedelta(days=lookback_years * 365)).isoformat()
+    total_assets = len(current_snapshot)
+    started_at = time.time()
 
-    for _, asset_row in current_snapshot.sort_values("rank_global").iterrows():
+    for index, (_, asset_row) in enumerate(current_snapshot.sort_values("rank_global").iterrows(), start=1):
         asset_history = pd.DataFrame(columns=["date", "market_cap_usd", "price_usd"])
         source = "historical_fallback"
         source_slug: str | None = None
@@ -280,6 +282,10 @@ def fetch_top_assets_histories(current_snapshot: pd.DataFrame, lookback_years: i
 
         history_frames.append(asset_history)
         time.sleep(0.05)
+
+        if index == 1 or index % 25 == 0 or index == total_assets:
+            elapsed = time.time() - started_at
+            print(f"History fetch progress: {index}/{total_assets} assets processed in {elapsed:.1f}s")
 
     if not history_frames:
         return pd.DataFrame(
