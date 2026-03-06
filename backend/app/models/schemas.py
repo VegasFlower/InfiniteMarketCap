@@ -13,15 +13,49 @@ class OverviewResponse(BaseModel):
 
 
 class WatchlistAsset(BaseModel):
+    asset_id: str
     symbol: str
     name: str
     market_cap_usd: float
+    price_usd: float
+    change_24h_pct: float
     rank_global: int
     return_7d: float
     return_30d: float
-    rank_change_30d: int
+    return_90d: float
+    return_180d: float
+    return_1y: float
+    return_3y: float
+    return_5y: float
+    rank_change_90d: int
+    rank_change_180d: int
+    rank_change_1y: int
+    share_in_top30: float
+    share_in_top50: float
     share_in_top100: float
+    share_in_top500: float
     trend_score: float
+
+
+class TopAssetRow(BaseModel):
+    asset_id: str
+    name: str
+    symbol: str
+    rank_global: int
+    market_cap_usd: float
+    price_usd: float
+    change_24h_pct: float
+    return_7d: float
+    return_30d: float
+    return_60d: float
+    return_90d: float
+    return_180d: float
+    return_1y: float
+    return_3y: float
+    return_5y: float
+    rank_change_90d: int
+    rank_change_180d: int
+    rank_change_1y: int
 
 
 class RankMover(BaseModel):
@@ -48,12 +82,24 @@ class AssetSummary(BaseModel):
     symbol: str
     name: str
     market_cap_usd: float
+    price_usd: float
+    change_24h_pct: float
     rank_global: int
     return_7d: float
     return_30d: float
     return_90d: float
+    return_180d: float
+    return_1y: float
+    return_3y: float
+    return_5y: float
+    rank_change_90d: int
+    rank_change_180d: int
+    rank_change_1y: int
     trend_score: float
+    share_in_top30: float
+    share_in_top50: float
     share_in_top100: float
+    share_in_top500: float
 
 
 class TimeseriesPoint(BaseModel):

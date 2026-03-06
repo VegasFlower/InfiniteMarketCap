@@ -12,14 +12,15 @@ Global market-cap dashboard for tracking the world's largest assets, their ranki
 
 ## Real data sources
 
-- `CompaniesMarketCap`: current top-asset ranking and historical market-cap/price pages for supported assets
-- `CoinGecko API`: historical price and market-cap data for crypto assets such as BTC and ETH
+- `CompaniesMarketCap`: top-asset ranking (paginated) and historical market-cap/price pages
+- `Stooq`: fallback long-range daily price history for assets that have no historical chart page (e.g. BTC/ETH/Gold)
 
 ## Current limitations
 
 - Historical global ranks are only available from snapshots collected by this project going forward.
 - For some non-equity assets such as gold, historical market cap is available before historical price is.
-- The system currently backfills detailed history only for tracked assets: `GOLD`, `BTC`, `ETH`, `NVDA`.
+- Some assets (especially specific crypto rows) may not expose full history pages on the source site.
+- Historical global rank changes become more accurate as daily snapshots accumulate.
 
 ## Quick start
 
@@ -48,6 +49,7 @@ cd data_pipeline
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export TOP_ASSET_LIMIT=300  # can set to 500 or 1000
 cd jobs
 python pull_assets.py
 python normalize_assets.py

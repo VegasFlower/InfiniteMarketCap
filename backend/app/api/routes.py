@@ -7,6 +7,7 @@ from app.models.schemas import (
     OverviewResponse,
     RankMover,
     TimeseriesPoint,
+    TopAssetRow,
     WatchlistAsset,
 )
 from app.services import data_store, mock_data
@@ -32,6 +33,13 @@ def dashboard_watchlist(symbols: str = "GOLD,BTC,ETH,NVDA") -> list[dict]:
     if data_store.has_real_data():
         return data_store.get_watchlist(symbol_list)
     return mock_data.get_watchlist(symbol_list)
+
+
+@router.get("/dashboard/top-assets", response_model=list[TopAssetRow])
+def dashboard_top_assets(limit: int = Query(default=300, ge=30, le=1000)) -> list[dict]:
+    if data_store.has_real_data():
+        return data_store.get_top_assets(limit)
+    return mock_data.get_top_assets(limit)
 
 
 @router.get("/dashboard/rank-movers", response_model=list[RankMover])

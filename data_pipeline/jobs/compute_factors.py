@@ -7,7 +7,24 @@ import pandas as pd
 from common import ensure_db
 
 
-LOOKBACK_WINDOWS = [7, 30, 60, 90]
+RETURN_WINDOWS = {
+    1: "return_1d",
+    7: "return_7d",
+    30: "return_30d",
+    60: "return_60d",
+    90: "return_90d",
+    180: "return_180d",
+    365: "return_365d",
+    1095: "return_3y",
+    1825: "return_5y",
+}
+RANK_WINDOWS = {
+    7: "rank_change_7d",
+    30: "rank_change_30d",
+    90: "rank_change_90d",
+    180: "rank_change_180d",
+    365: "rank_change_365d",
+}
 
 
 def _safe_return(current_value: float | None, previous_value: float | None) -> float | None:
@@ -16,17 +33,27 @@ def _safe_return(current_value: float | None, previous_value: float | None) -> f
     return (current_value / previous_value) - 1
 
 
-def _latest_valid(group: pd.DataFrame, column: str, on_or_before_date: pd.Timestamp) -> float | int | None:
+def _latest_valid(
+    group: pd.DataFrame,
+    column: str,
+    on_or_before_date: pd.Timestamp,
+    max_staleness_days: int | None = None,
+) -> float | int | None:
     subset = group[(group["date_dt"] <= on_or_before_date) & group[column].notna()]
     if subset.empty:
         return None
-    return subset.iloc[-1][column]
+    latest = subset.iloc[-1]
+    if max_staleness_days is not None:
+        staleness_days = int((on_or_before_date - latest["date_dt"]).days)
+        if staleness_days > max_staleness_days:
+            return None
+    return latest[column]
 
 
 def main() -> None:
     conn = ensure_db()
     snapshots = conn.execute(
-        "SELECT date, asset_id, price_usd, market_cap_usd, rank_global FROM fact_asset_snapshot_daily ORDER BY asset_id, date"
+        "SELECT date, asset_id, price_usd, market_cap_usd, rank_global, change_24h_pct FROM fact_asset_snapshot_daily ORDER BY asset_id, date"
     ).fetchdf()
 
     if snapshots.empty:
@@ -39,15 +66,17 @@ def main() -> None:
 
     current_ranked = snapshots[(snapshots["date_dt"] == as_of_date) & snapshots["rank_global"].notna()].copy()
     current_ranked = current_ranked.sort_values("rank_global")
-    assets = conn.execute("SELECT asset_id, symbol, name FROM dim_asset").fetchdf()
+    current_asset_ids = set(current_ranked["asset_id"].astype(str))
 
     records: list[dict] = []
-    for asset_id, group in snapshots.groupby("asset_id"):
+    scoped_snapshots = snapshots[snapshots["asset_id"].isin(current_asset_ids)]
+    for asset_id, group in scoped_snapshots.groupby("asset_id"):
         group = group.sort_values("date_dt")
         current_row = group[group["date_dt"] <= as_of_date].iloc[-1]
         current_price = current_row["price_usd"] if pd.notna(current_row["price_usd"]) else None
         current_mcap = current_row["market_cap_usd"] if pd.notna(current_row["market_cap_usd"]) else None
         current_rank = current_row["rank_global"] if pd.notna(current_row["rank_global"]) else None
+        current_change_24h = current_row["change_24h_pct"] if pd.notna(current_row.get("change_24h_pct")) else None
 
         factor_row: dict[str, object] = {
             "date": as_of_date.date().isoformat(),
@@ -55,25 +84,29 @@ def main() -> None:
             "created_at": datetime.now(tz=UTC),
         }
 
-        for window in LOOKBACK_WINDOWS:
+        for window, column_name in RETURN_WINDOWS.items():
             lookback_date = as_of_date - pd.Timedelta(days=window)
-            prev_price = _latest_valid(group, "price_usd", lookback_date)
-            prev_mcap = _latest_valid(group, "market_cap_usd", lookback_date)
-            prev_rank = _latest_valid(group, "rank_global", lookback_date)
+            tolerance_days = max(10, int(window * 0.75))
+            prev_price = _latest_valid(group, "price_usd", lookback_date, max_staleness_days=tolerance_days)
+            prev_mcap = _latest_valid(group, "market_cap_usd", lookback_date, max_staleness_days=tolerance_days)
 
-            price_return = _safe_return(current_price, prev_price)
-            if price_return is None:
-                price_return = _safe_return(current_mcap, prev_mcap)
-            factor_row[f"return_{window}d"] = price_return
-            if window in {30}:
+            value = _safe_return(current_price, prev_price)
+            if value is None:
+                value = _safe_return(current_mcap, prev_mcap)
+            if window == 1 and value is None:
+                value = current_change_24h
+            factor_row[column_name] = value
+
+            if window == 30:
                 factor_row["mcap_change_30d"] = _safe_return(current_mcap, prev_mcap)
-            if window in {7, 30, 90}:
-                factor_row[f"rank_change_{window}d"] = int(current_rank - prev_rank) if current_rank is not None and prev_rank is not None else None
+
+        for window, column_name in RANK_WINDOWS.items():
+            lookback_date = as_of_date - pd.Timedelta(days=window)
+            tolerance_days = max(14, int(window * 0.75))
+            prev_rank = _latest_valid(group, "rank_global", lookback_date, max_staleness_days=tolerance_days)
+            factor_row[column_name] = int(current_rank - prev_rank) if current_rank is not None and prev_rank is not None else None
 
         factor_row.setdefault("mcap_change_30d", None)
-        factor_row.setdefault("rank_change_7d", None)
-        factor_row.setdefault("rank_change_30d", None)
-        factor_row.setdefault("rank_change_90d", None)
         records.append(factor_row)
 
     factors = pd.DataFrame(records)
@@ -85,6 +118,7 @@ def main() -> None:
 
     current_lookup = current_ranked[["asset_id", "market_cap_usd", "rank_global"]].copy()
     factors = factors.merge(current_lookup, on="asset_id", how="left")
+
     for top_n in (30, 50, 100, 500):
         denominator = totals_by_topn[top_n]
         factors[f"share_in_top{top_n}"] = factors["market_cap_usd"] / denominator if denominator else None
@@ -93,12 +127,18 @@ def main() -> None:
     benchmark_30d = top100_returns["return_30d"].median(skipna=True)
     if pd.isna(benchmark_30d):
         benchmark_30d = 0.0
-    factors["rel_strength_vs_top100_30d"] = factors["return_30d"].fillna(0) - benchmark_30d
+    factors["rel_strength_vs_top100_30d"] = pd.to_numeric(factors["return_30d"], errors="coerce").fillna(0) - benchmark_30d
 
     returns_score = pd.to_numeric(factors["return_30d"], errors="coerce").fillna(0).clip(-0.5, 1.0)
     rank_score = (-pd.to_numeric(factors["rank_change_30d"], errors="coerce").fillna(0)).clip(-20, 20) / 20
     strength_score = pd.to_numeric(factors["rel_strength_vs_top100_30d"], errors="coerce").fillna(0).clip(-0.5, 0.5)
-    volatility_proxy = factors[["return_7d", "return_30d", "return_60d", "return_90d"]].std(axis=1).fillna(0).clip(0, 0.5)
+    volatility_proxy = (
+        factors[["return_7d", "return_30d", "return_60d", "return_90d"]]
+        .apply(pd.to_numeric, errors="coerce")
+        .std(axis=1)
+        .fillna(0)
+        .clip(0, 0.5)
+    )
     factors["trend_score"] = (
         ((returns_score + 0.5) / 1.5) * 35
         + ((rank_score + 1) / 2) * 30
@@ -106,27 +146,36 @@ def main() -> None:
         + ((0.5 - volatility_proxy) / 0.5) * 15
     ).round(2)
 
-    factors = factors[
-        [
-            "date",
-            "asset_id",
-            "return_7d",
-            "return_30d",
-            "return_60d",
-            "return_90d",
-            "mcap_change_30d",
-            "rank_change_7d",
-            "rank_change_30d",
-            "rank_change_90d",
-            "share_in_top30",
-            "share_in_top50",
-            "share_in_top100",
-            "share_in_top500",
-            "rel_strength_vs_top100_30d",
-            "trend_score",
-            "created_at",
-        ]
+    factor_columns = [
+        "date",
+        "asset_id",
+        "return_1d",
+        "return_7d",
+        "return_30d",
+        "return_60d",
+        "return_90d",
+        "return_180d",
+        "return_365d",
+        "return_3y",
+        "return_5y",
+        "mcap_change_30d",
+        "rank_change_7d",
+        "rank_change_30d",
+        "rank_change_90d",
+        "rank_change_180d",
+        "rank_change_365d",
+        "share_in_top30",
+        "share_in_top50",
+        "share_in_top100",
+        "share_in_top500",
+        "rel_strength_vs_top100_30d",
+        "trend_score",
+        "created_at",
     ]
+    for column in factor_columns:
+        if column not in factors.columns:
+            factors[column] = None
+    factors = factors[factor_columns]
 
     agg_rows = []
     for top_n in (30, 50, 100, 500):
@@ -152,11 +201,31 @@ def main() -> None:
 
     conn.register("factors_df", factors)
     conn.execute("DELETE FROM fact_asset_factor_daily WHERE date = ?", [as_of_date.date().isoformat()])
-    conn.execute("INSERT INTO fact_asset_factor_daily SELECT * FROM factors_df")
+    conn.execute(
+        """
+        INSERT INTO fact_asset_factor_daily
+        (date, asset_id, return_1d, return_7d, return_30d, return_60d, return_90d, return_180d, return_365d, return_3y, return_5y,
+         mcap_change_30d, rank_change_7d, rank_change_30d, rank_change_90d, rank_change_180d, rank_change_365d,
+         share_in_top30, share_in_top50, share_in_top100, share_in_top500, rel_strength_vs_top100_30d, trend_score, created_at)
+        SELECT
+          date, asset_id, return_1d, return_7d, return_30d, return_60d, return_90d, return_180d, return_365d, return_3y, return_5y,
+          mcap_change_30d, rank_change_7d, rank_change_30d, rank_change_90d, rank_change_180d, rank_change_365d,
+          share_in_top30, share_in_top50, share_in_top100, share_in_top500, rel_strength_vs_top100_30d, trend_score, created_at
+        FROM factors_df
+        """
+    )
     if not agg.empty:
         conn.register("agg_df", agg)
         conn.execute("DELETE FROM agg_topn_daily WHERE date = ?", [as_of_date.date().isoformat()])
-        conn.execute("INSERT INTO agg_topn_daily SELECT * FROM agg_df")
+        conn.execute(
+            """
+            INSERT INTO agg_topn_daily
+            (date, top_n, total_market_cap_usd, top5_share, top10_share, advancers_ratio, median_return_7d, mean_return_7d, created_at)
+            SELECT date, top_n, total_market_cap_usd, top5_share, top10_share, advancers_ratio, median_return_7d, mean_return_7d, created_at
+            FROM agg_df
+            """
+        )
+
     print(f"Computed factor rows for {len(factors)} assets as of {as_of_date.date().isoformat()}")
 
 
